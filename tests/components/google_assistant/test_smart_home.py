@@ -74,8 +74,8 @@ async def test_sync_message(hass):
                 'willReportState': False,
                 'attributes': {
                     'colorModel': 'rgb',
-                    'temperatureMinK': 6493,
-                    'temperatureMaxK': 2000,
+                    'temperatureMinK': 2000,
+                    'temperatureMaxK': 6535,
                 },
                 'roomHint': 'Living Room'
             }]
@@ -258,4 +258,57 @@ def test_serialize_input_boolean():
         'traits': ['action.devices.traits.OnOff'],
         'type': 'action.devices.types.SWITCH',
         'willReportState': False,
+    }
+
+
+async def test_unavailable_state_doesnt_sync(hass):
+    """Test that an unavailable entity does not sync over."""
+    light = DemoLight(
+        None, 'Demo Light',
+        state=False,
+    )
+    light.hass = hass
+    light.entity_id = 'light.demo_light'
+    light._available = False
+    await light.async_update_ha_state()
+
+    result = await sh.async_handle_message(hass, BASIC_CONFIG, {
+        "requestId": REQ_ID,
+        "inputs": [{
+            "intent": "action.devices.SYNC"
+        }]
+    })
+
+    assert result == {
+        'requestId': REQ_ID,
+        'payload': {
+            'agentUserId': 'test-agent',
+            'devices': []
+        }
+    }
+
+
+async def test_empty_name_doesnt_sync(hass):
+    """Test that an entity with empty name does not sync over."""
+    light = DemoLight(
+        None, ' ',
+        state=False,
+    )
+    light.hass = hass
+    light.entity_id = 'light.demo_light'
+    await light.async_update_ha_state()
+
+    result = await sh.async_handle_message(hass, BASIC_CONFIG, {
+        "requestId": REQ_ID,
+        "inputs": [{
+            "intent": "action.devices.SYNC"
+        }]
+    })
+
+    assert result == {
+        'requestId': REQ_ID,
+        'payload': {
+            'agentUserId': 'test-agent',
+            'devices': []
+        }
     }

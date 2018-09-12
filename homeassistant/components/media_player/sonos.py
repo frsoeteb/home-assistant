@@ -9,8 +9,8 @@ import datetime
 import functools as ft
 import logging
 import socket
-import urllib
 import threading
+import urllib
 
 import voluptuous as vol
 
@@ -20,18 +20,20 @@ from homeassistant.components.media_player import (
     SUPPORT_PLAY_MEDIA, SUPPORT_PREVIOUS_TRACK, SUPPORT_SEEK,
     SUPPORT_SELECT_SOURCE, SUPPORT_SHUFFLE_SET, SUPPORT_STOP,
     SUPPORT_VOLUME_MUTE, SUPPORT_VOLUME_SET, MediaPlayerDevice)
+from homeassistant.components.sonos import DOMAIN as SONOS_DOMAIN
 from homeassistant.const import (
     ATTR_ENTITY_ID, ATTR_TIME, CONF_HOSTS, STATE_IDLE, STATE_OFF, STATE_PAUSED,
     STATE_PLAYING)
 import homeassistant.helpers.config_validation as cv
 from homeassistant.util.dt import utcnow
 
-REQUIREMENTS = ['SoCo==0.14']
+DEPENDENCIES = ('sonos',)
 
 _LOGGER = logging.getLogger(__name__)
 
 # Quiet down soco logging to just actual problems.
 logging.getLogger('soco').setLevel(logging.WARNING)
+logging.getLogger('soco.events').setLevel(logging.ERROR)
 logging.getLogger('soco.data_structures_entry').setLevel(logging.ERROR)
 _SOCO_SERVICES_LOGGER = logging.getLogger('soco.services')
 
@@ -49,11 +51,12 @@ SERVICE_CLEAR_TIMER = 'sonos_clear_sleep_timer'
 SERVICE_UPDATE_ALARM = 'sonos_update_alarm'
 SERVICE_SET_OPTION = 'sonos_set_option'
 
-DATA_SONOS = 'sonos'
+DATA_SONOS = 'sonos_devices'
 
 SOURCE_LINEIN = 'Line-in'
 SOURCE_TV = 'TV'
 
+CONF_ADVERTISE_ADDR = 'advertise_addr'
 CONF_INTERFACE_ADDR = 'interface_addr'
 
 # Service call validation schemas
@@ -67,11 +70,12 @@ ATTR_WITH_GROUP = 'with_group'
 ATTR_NIGHT_SOUND = 'night_sound'
 ATTR_SPEECH_ENHANCE = 'speech_enhance'
 
-ATTR_IS_COORDINATOR = 'is_coordinator'
+ATTR_SONOS_GROUP = 'sonos_group'
 
 UPNP_ERRORS_TO_IGNORE = ['701', '711']
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
+    vol.Optional(CONF_ADVERTISE_ADDR): cv.string,
     vol.Optional(CONF_INTERFACE_ADDR): cv.string,
     vol.Optional(CONF_HOSTS): vol.All(cv.ensure_list, [cv.string]),
 })
@@ -117,27 +121,36 @@ class SonosData:
         self.topology_lock = threading.Lock()
 
 
-def setup_platform(hass, config, add_devices, discovery_info=None):
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Set up the Sonos platform.
+
+    Deprecated.
+    """
+    _LOGGER.warning('Loading Sonos via platform config is deprecated.')
+    _setup_platform(hass, config, add_entities, discovery_info)
+
+
+async def async_setup_entry(hass, config_entry, async_add_entities):
+    """Set up Sonos from a config entry."""
+    def add_entities(devices, update_before_add=False):
+        """Sync version of async add devices."""
+        hass.add_job(async_add_entities, devices, update_before_add)
+
+    hass.add_job(_setup_platform, hass,
+                 hass.data[SONOS_DOMAIN].get('media_player', {}),
+                 add_entities, None)
+
+
+def _setup_platform(hass, config, add_entities, discovery_info):
     """Set up the Sonos platform."""
     import soco
-    import soco.events
-    import soco.exceptions
-
-    orig_parse_event_xml = soco.events.parse_event_xml
-
-    def safe_parse_event_xml(xml):
-        """Avoid SoCo 0.14 event thread dying from invalid xml."""
-        try:
-            return orig_parse_event_xml(xml)
-        # pylint: disable=broad-except
-        except Exception as ex:
-            _LOGGER.debug("Dodged exception: %s %s", type(ex), str(ex))
-            return {}
-
-    soco.events.parse_event_xml = safe_parse_event_xml
 
     if DATA_SONOS not in hass.data:
         hass.data[DATA_SONOS] = SonosData()
+
+    advertise_addr = config.get(CONF_ADVERTISE_ADDR)
+    if advertise_addr:
+        soco.config.EVENT_ADVERTISE_IP = advertise_addr
 
     players = []
     if discovery_info:
@@ -173,7 +186,7 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
             return
 
     hass.data[DATA_SONOS].uids.update(p.uid for p in players)
-    add_devices(SonosDevice(p) for p in players)
+    add_entities(SonosDevice(p) for p in players)
     _LOGGER.debug("Added %s Sonos speakers", len(players))
 
     def service_handle(service):
@@ -208,9 +221,9 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
             elif service.service == SERVICE_CLEAR_TIMER:
                 device.clear_sleep_timer()
             elif service.service == SERVICE_UPDATE_ALARM:
-                device.update_alarm(**service.data)
+                device.set_alarm(**service.data)
             elif service.service == SERVICE_SET_OPTION:
-                device.update_option(**service.data)
+                device.set_option(**service.data)
 
             device.schedule_update_ha_state(True)
 
@@ -321,7 +334,7 @@ def _is_radio_uri(uri):
     """Return whether the URI is a radio stream."""
     radio_schemes = (
         'x-rincon-mp3radio:', 'x-sonosapi-stream:', 'x-sonosapi-radio:',
-        'hls-radio:')
+        'x-sonosapi-hls:', 'hls-radio:')
     return uri.startswith(radio_schemes)
 
 
@@ -330,15 +343,17 @@ class SonosDevice(MediaPlayerDevice):
 
     def __init__(self, player):
         """Initialize the Sonos device."""
+        self._receives_events = False
         self._volume_increment = 5
         self._unique_id = player.uid
         self._player = player
         self._model = None
         self._player_volume = None
-        self._player_volume_muted = None
+        self._player_muted = None
         self._play_mode = None
         self._name = None
         self._coordinator = None
+        self._sonos_group = None
         self._status = None
         self._media_duration = None
         self._media_position = None
@@ -372,6 +387,18 @@ class SonosDevice(MediaPlayerDevice):
     def name(self):
         """Return the name of the device."""
         return self._name
+
+    @property
+    def device_info(self):
+        """Return information about the device."""
+        return {
+            'identifiers': {
+                (SONOS_DOMAIN, self._unique_id)
+            },
+            'name': self._name,
+            'model': self._model.replace("Sonos ", ""),
+            'manufacturer': 'Sonos',
+        }
 
     @property
     @soco_coordinator
@@ -420,140 +447,27 @@ class SonosDevice(MediaPlayerDevice):
         speaker_info = self.soco.get_speaker_info(True)
         self._name = speaker_info['zone_name']
         self._model = speaker_info['model_name']
-        self._player_volume = self.soco.volume
-        self._player_volume_muted = self.soco.mute
-        self._play_mode = self.soco.play_mode
-        self._night_sound = self.soco.night_mode
-        self._speech_enhance = self.soco.dialog_mode
-
-        self._favorites = []
-        for fav in self.soco.music_library.get_sonos_favorites():
-            # SoCo 0.14 raises a generic Exception on invalid xml in favorites.
-            # Filter those out now so our list is safe to use.
-            try:
-                if fav.reference.get_uri():
-                    self._favorites.append(fav)
-            # pylint: disable=broad-except
-            except Exception:
-                _LOGGER.debug("Ignoring invalid favorite '%s'", fav.title)
-
-    def _subscribe_to_player_events(self):
-        """Add event subscriptions."""
-        player = self.soco
-
-        # New player available, build the current group topology
-        for device in self.hass.data[DATA_SONOS].devices:
-            device.process_zonegrouptopology_event(None)
-
-        queue = _ProcessSonosEventQueue(self.process_avtransport_event)
-        player.avTransport.subscribe(auto_renew=True, event_queue=queue)
-
-        queue = _ProcessSonosEventQueue(self.process_rendering_event)
-        player.renderingControl.subscribe(auto_renew=True, event_queue=queue)
-
-        queue = _ProcessSonosEventQueue(self.process_zonegrouptopology_event)
-        player.zoneGroupTopology.subscribe(auto_renew=True, event_queue=queue)
-
-    def update(self):
-        """Retrieve latest state."""
-        available = self._check_available()
-        if self._available != available:
-            self._available = available
-            if available:
-                self._set_basic_information()
-                self._subscribe_to_player_events()
-            else:
-                self._player_volume = None
-                self._player_volume_muted = None
-                self._status = 'OFF'
-                self._coordinator = None
-                self._media_duration = None
-                self._media_position = None
-                self._media_position_updated_at = None
-                self._media_image_url = None
-                self._media_artist = None
-                self._media_album_name = None
-                self._media_title = None
-                self._source_name = None
-
-    def process_avtransport_event(self, event):
-        """Process a track change event coming from a coordinator."""
-        transport_info = self.soco.get_current_transport_info()
-        new_status = transport_info.get('current_transport_state')
-
-        # Ignore transitions, we should get the target state soon
-        if new_status == 'TRANSITIONING':
-            return
-
         self._play_mode = self.soco.play_mode
 
-        if self.soco.is_playing_tv:
-            self._refresh_linein(SOURCE_TV)
-        elif self.soco.is_playing_line_in:
-            self._refresh_linein(SOURCE_LINEIN)
-        else:
-            track_info = self.soco.get_current_track_info()
+        self.update_volume()
 
-            if _is_radio_uri(track_info['uri']):
-                self._refresh_radio(event.variables, track_info)
-            else:
-                update_position = (new_status != self._status)
-                self._refresh_music(update_position, track_info)
+        self._set_favorites()
 
-        self._status = new_status
-
-        self.schedule_update_ha_state()
-
-        # Also update slaves
-        for entity in self.hass.data[DATA_SONOS].devices:
-            coordinator = entity.coordinator
-            if coordinator and coordinator.unique_id == self.unique_id:
-                entity.schedule_update_ha_state()
-
-    def process_rendering_event(self, event):
-        """Process a volume change event coming from a player."""
-        variables = event.variables
-
-        if 'volume' in variables:
-            self._player_volume = int(variables['volume']['Master'])
-
-        if 'mute' in variables:
-            self._player_volume_muted = (variables['mute']['Master'] == '1')
-
-        if 'night_mode' in variables:
-            self._night_sound = (variables['night_mode'] == '1')
-
-        if 'dialog_level' in variables:
-            self._speech_enhance = (variables['dialog_level'] == '1')
-
-        self.schedule_update_ha_state()
-
-    def process_zonegrouptopology_event(self, event):
-        """Process a zone group topology event coming from a player."""
-        if event and not hasattr(event, 'zone_player_uui_ds_in_group'):
-            return
-
-        with self.hass.data[DATA_SONOS].topology_lock:
-            group = event and event.zone_player_uui_ds_in_group
-            if group:
-                # New group information is pushed
-                coordinator_uid, *slave_uids = group.split(',')
-            else:
-                # Use SoCo cache for existing topology
-                coordinator_uid = self.soco.group.coordinator.uid
-                slave_uids = [p.uid for p in self.soco.group.members
-                              if p.uid != coordinator_uid]
-
-            if self.unique_id == coordinator_uid:
-                self._coordinator = None
-                self.schedule_update_ha_state()
-
-                for slave_uid in slave_uids:
-                    slave = _get_entity_from_soco_uid(self.hass, slave_uid)
-                    if slave:
-                        # pylint: disable=protected-access
-                        slave._coordinator = self
-                        slave.schedule_update_ha_state()
+    def _set_favorites(self):
+        """Set available favorites."""
+        # SoCo 0.16 raises a generic Exception on invalid xml in favorites.
+        # Filter those out now so our list is safe to use.
+        # pylint: disable=broad-except
+        try:
+            self._favorites = []
+            for fav in self.soco.music_library.get_sonos_favorites():
+                try:
+                    if fav.reference.get_uri():
+                        self._favorites.append(fav)
+                except Exception:
+                    _LOGGER.debug("Ignoring invalid favorite '%s'", fav.title)
+        except Exception:
+            _LOGGER.debug("Ignoring invalid favorite list")
 
     def _radio_artwork(self, url):
         """Return the private URL with artwork for a radio stream."""
@@ -568,7 +482,91 @@ class SonosDevice(MediaPlayerDevice):
             )
         return url
 
-    def _refresh_linein(self, source):
+    def _subscribe_to_player_events(self):
+        """Add event subscriptions."""
+        self._receives_events = False
+
+        # New player available, build the current group topology
+        for device in self.hass.data[DATA_SONOS].devices:
+            device.update_groups()
+
+        player = self.soco
+
+        queue = _ProcessSonosEventQueue(self.update_media)
+        player.avTransport.subscribe(auto_renew=True, event_queue=queue)
+
+        queue = _ProcessSonosEventQueue(self.update_volume)
+        player.renderingControl.subscribe(auto_renew=True, event_queue=queue)
+
+        queue = _ProcessSonosEventQueue(self.update_groups)
+        player.zoneGroupTopology.subscribe(auto_renew=True, event_queue=queue)
+
+        queue = _ProcessSonosEventQueue(self.update_content)
+        player.contentDirectory.subscribe(auto_renew=True, event_queue=queue)
+
+    def update(self):
+        """Retrieve latest state."""
+        available = self._check_available()
+        if self._available != available:
+            self._available = available
+            if available:
+                self._set_basic_information()
+                self._subscribe_to_player_events()
+            else:
+                self._player_volume = None
+                self._player_muted = None
+                self._status = 'OFF'
+                self._coordinator = None
+                self._media_duration = None
+                self._media_position = None
+                self._media_position_updated_at = None
+                self._media_image_url = None
+                self._media_artist = None
+                self._media_album_name = None
+                self._media_title = None
+                self._source_name = None
+        elif available and not self._receives_events:
+            self.update_groups()
+            self.update_volume()
+            if self.is_coordinator:
+                self.update_media()
+
+    def update_media(self, event=None):
+        """Update information about currently playing media."""
+        transport_info = self.soco.get_current_transport_info()
+        new_status = transport_info.get('current_transport_state')
+
+        # Ignore transitions, we should get the target state soon
+        if new_status == 'TRANSITIONING':
+            return
+
+        self._play_mode = self.soco.play_mode
+
+        if self.soco.is_playing_tv:
+            self.update_media_linein(SOURCE_TV)
+        elif self.soco.is_playing_line_in:
+            self.update_media_linein(SOURCE_LINEIN)
+        else:
+            track_info = self.soco.get_current_track_info()
+
+            if _is_radio_uri(track_info['uri']):
+                variables = event and event.variables
+                self.update_media_radio(variables, track_info)
+            else:
+                update_position = (new_status != self._status)
+                self.update_media_music(update_position, track_info)
+
+        self._status = new_status
+
+        self.schedule_update_ha_state()
+
+        # Also update slaves
+        for entity in self.hass.data[DATA_SONOS].devices:
+            coordinator = entity.coordinator
+            if coordinator and coordinator.unique_id == self.unique_id:
+                entity.schedule_update_ha_state()
+
+    def update_media_linein(self, source):
         """Update state when playing from line-in/tv."""
         self._media_duration = None
         self._media_position = None
@@ -582,7 +580,7 @@ class SonosDevice(MediaPlayerDevice):
 
         self._source_name = source
 
-    def _refresh_radio(self, variables, track_info):
+    def update_media_radio(self, variables, track_info):
         """Update state when streaming radio."""
         self._media_duration = None
         self._media_position = None
@@ -603,7 +601,7 @@ class SonosDevice(MediaPlayerDevice):
                 artist=self._media_artist,
                 title=self._media_title
             )
-        else:
+        elif variables:
             # "On Now" field in the sonos pc app
             current_track_metadata = variables.get('current_track_meta_data')
             if current_track_metadata:
@@ -643,7 +641,7 @@ class SonosDevice(MediaPlayerDevice):
             if fav.reference.get_uri() == media_info['CurrentURI']:
                 self._source_name = fav.title
 
-    def _refresh_music(self, update_media_position, track_info):
+    def update_media_music(self, update_media_position, track_info):
         """Update state when playing music tracks."""
         self._media_duration = _timespan_secs(track_info.get('duration'))
 
@@ -682,6 +680,77 @@ class SonosDevice(MediaPlayerDevice):
 
         self._source_name = None
 
+    def update_volume(self, event=None):
+        """Update information about currently volume settings."""
+        if event:
+            variables = event.variables
+
+            if 'volume' in variables:
+                self._player_volume = int(variables['volume']['Master'])
+
+            if 'mute' in variables:
+                self._player_muted = (variables['mute']['Master'] == '1')
+
+            if 'night_mode' in variables:
+                self._night_sound = (variables['night_mode'] == '1')
+
+            if 'dialog_level' in variables:
+                self._speech_enhance = (variables['dialog_level'] == '1')
+
+            self.schedule_update_ha_state()
+        else:
+            self._player_volume = self.soco.volume
+            self._player_muted = self.soco.mute
+            self._night_sound = self.soco.night_mode
+            self._speech_enhance = self.soco.dialog_mode
+
+    def update_groups(self, event=None):
+        """Process a zone group topology event coming from a player."""
+        if event:
+            self._receives_events = True
+
+            if not hasattr(event, 'zone_player_uui_ds_in_group'):
+                return
+
+        with self.hass.data[DATA_SONOS].topology_lock:
+            group = event and event.zone_player_uui_ds_in_group
+            if group:
+                # New group information is pushed
+                coordinator_uid, *slave_uids = group.split(',')
+            elif self.soco.group:
+                # Use SoCo cache for existing topology
+                coordinator_uid = self.soco.group.coordinator.uid
+                slave_uids = [p.uid for p in self.soco.group.members
+                              if p.uid != coordinator_uid]
+            else:
+                # Not yet in the cache, this can happen when a speaker boots
+                coordinator_uid = self.unique_id
+                slave_uids = []
+
+            if self.unique_id == coordinator_uid:
+                sonos_group = []
+                for uid in (coordinator_uid, *slave_uids):
+                    entity = _get_entity_from_soco_uid(self.hass, uid)
+                    if entity:
+                        sonos_group.append(entity.entity_id)
+
+                self._coordinator = None
+                self._sonos_group = sonos_group
+                self.schedule_update_ha_state()
+
+                for slave_uid in slave_uids:
+                    slave = _get_entity_from_soco_uid(self.hass, slave_uid)
+                    if slave:
+                        # pylint: disable=protected-access
+                        slave._coordinator = self
+                        slave._sonos_group = sonos_group
+                        slave.schedule_update_ha_state()
+
+    def update_content(self, event=None):
+        """Update information about available content."""
+        self._set_favorites()
+        self.schedule_update_ha_state()
+
     @property
     def volume_level(self):
         """Volume level of the media player (0..1)."""
@@ -690,7 +759,7 @@ class SonosDevice(MediaPlayerDevice):
     @property
     def is_volume_muted(self):
         """Return true if volume is muted."""
-        return self._player_volume_muted
+        return self._player_muted
 
     @property
     @soco_coordinator
@@ -810,10 +879,13 @@ class SonosDevice(MediaPlayerDevice):
         """List of available input sources."""
         sources = [fav.title for fav in self._favorites]
 
-        if 'PLAY:5' in self._model or 'CONNECT' in self._model:
+        model = self._model.upper()
+        if 'PLAY:5' in model or 'CONNECT' in model:
             sources += [SOURCE_LINEIN]
-        elif 'PLAYBAR' in self._model:
+        elif 'PLAYBAR' in model:
             sources += [SOURCE_LINEIN, SOURCE_TV]
+        elif 'BEAM' in model:
+            sources += [SOURCE_TV]
 
         return sources
 
@@ -986,7 +1058,7 @@ class SonosDevice(MediaPlayerDevice):
 
     @soco_error()
     @soco_coordinator
-    def update_alarm(self, **data):
+    def set_alarm(self, **data):
         """Set the alarm clock on the player."""
         from soco import alarms
         alarm = None
@@ -1009,7 +1081,7 @@ class SonosDevice(MediaPlayerDevice):
         alarm.save()
 
     @soco_error()
-    def update_option(self, **data):
+    def set_option(self, **data):
         """Modify playback options."""
         if ATTR_NIGHT_SOUND in data and self._night_sound is not None:
             self.soco.night_mode = data[ATTR_NIGHT_SOUND]
@@ -1020,7 +1092,7 @@ class SonosDevice(MediaPlayerDevice):
     @property
     def device_state_attributes(self):
         """Return device specific state attributes."""
-        attributes = {ATTR_IS_COORDINATOR: self.is_coordinator}
+        attributes = {ATTR_SONOS_GROUP: self._sonos_group}
 
         if self._night_sound is not None:
             attributes[ATTR_NIGHT_SOUND] = self._night_sound
