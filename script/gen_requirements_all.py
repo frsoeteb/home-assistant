@@ -11,7 +11,7 @@ COMMENT_REQUIREMENTS = (
     'RPi.GPIO',
     'raspihats',
     'rpi-rf',
-    'Adafruit_Python_DHT',
+    'Adafruit-DHT',
     'Adafruit_BBIO',
     'fritzconnection',
     'pybluez',
@@ -33,6 +33,8 @@ COMMENT_REQUIREMENTS = (
     'i2csense',
     'credstash',
     'bme680',
+    'homekit',
+    'py_noaa',
 )
 
 TEST_REQUIREMENTS = (
@@ -47,13 +49,16 @@ TEST_REQUIREMENTS = (
     'ephem',
     'evohomeclient',
     'feedparser',
+    'foobot_async',
     'gTTS-token',
+    'hangups',
     'HAP-python',
     'ha-ffmpeg',
     'haversine',
     'hbmqtt',
     'holidays',
     'home-assistant-frontend',
+    'homematicip',
     'influxdb',
     'libpurecoollink',
     'libsoundtouch',
@@ -66,13 +71,21 @@ TEST_REQUIREMENTS = (
     'prometheus_client',
     'pushbullet.py',
     'py-canary',
+    'pyblackbird',
+    'pydeconz',
     'pydispatcher',
     'PyJWT',
     'pylitejet',
     'pymonoprice',
     'pynx584',
+    'pyotp',
+    'pyqwikswitch',
+    'PyRMVtransport',
     'python-forecastio',
+    'python-nest',
+    'pytradfri\[async\]',
     'pyunifi',
+    'pyupnp-async',
     'pywebpush',
     'restrictedpython',
     'rflink',
@@ -94,7 +107,8 @@ TEST_REQUIREMENTS = (
 
 IGNORE_PACKAGES = (
     'homeassistant.components.recorder.models',
-    'homeassistant.components.homekit.*'
+    'homeassistant.components.homekit.*',
+    'homeassistant.components.hangouts.hangups_utils'
 )
 
 IGNORE_PIN = ('colorlog>2.1,<3', 'keyring>=9.3,<10.0', 'urllib3')
@@ -110,6 +124,8 @@ URL_PIN = ('https://home-assistant.io/developers/code_review_platform/'
 CONSTRAINT_PATH = os.path.join(os.path.dirname(__file__),
                                '../homeassistant/package_constraints.txt')
 CONSTRAINT_BASE = """
+pycryptodome>=3.6.6
+
 # Breaks Python 3.6 and is not needed for our supported Python versions
 enum34==1000000000.0.0
 
@@ -145,7 +161,7 @@ def core_requirements():
 
 
 def comment_requirement(req):
-    """Some requirements don't install on all systems."""
+    """Comment out requirement. Some don't install on all systems."""
     return any(ign in req for ign in COMMENT_REQUIREMENTS)
 
 
@@ -155,8 +171,10 @@ def gather_modules():
 
     errors = []
 
-    for package in sorted(explore_module('homeassistant.components', True) +
-                          explore_module('homeassistant.scripts', True)):
+    for package in sorted(
+            explore_module('homeassistant.components', True) +
+            explore_module('homeassistant.scripts', True) +
+            explore_module('homeassistant.auth', True)):
         try:
             module = importlib.import_module(package)
         except ImportError:
@@ -173,6 +191,10 @@ def gather_modules():
         for req in module.REQUIREMENTS:
             if req in IGNORE_REQ:
                 continue
+            if '://' in req:
+                errors.append(
+                    "{}[Only pypi dependencies are allowed: {}]".format(
+                        package, req))
             if req.partition('==')[1] == '' and req not in IGNORE_PIN:
                 errors.append(
                     "{}[Please pin requirement {}, see {}]".format(
@@ -248,7 +270,7 @@ def write_requirements_file(data):
 
 
 def write_test_requirements_file(data):
-    """Write the modules to the requirements_all.txt."""
+    """Write the modules to the requirements_test_all.txt."""
     with open('requirements_test_all.txt', 'w+', newline="\n") as req_file:
         req_file.write(data)
 
@@ -266,7 +288,7 @@ def validate_requirements_file(data):
 
 
 def validate_requirements_test_file(data):
-    """Validate if requirements_all.txt is up to date."""
+    """Validate if requirements_test_all.txt is up to date."""
     with open('requirements_test_all.txt', 'r') as req_file:
         return data == req_file.read()
 
@@ -277,23 +299,23 @@ def validate_constraints_file(data):
         return data + CONSTRAINT_BASE == req_file.read()
 
 
-def main():
-    """Main section of the script."""
+def main(validate):
+    """Run the script."""
     if not os.path.isfile('requirements_all.txt'):
         print('Run this from HA root dir')
-        return
+        return 1
 
     data = gather_modules()
 
     if data is None:
-        sys.exit(1)
+        return 1
 
     constraints = gather_constraints()
 
     reqs_file = requirements_all_output(data)
     reqs_test_file = requirements_test_output(data)
 
-    if sys.argv[-1] == 'validate':
+    if validate:
         errors = []
         if not validate_requirements_file(reqs_file):
             errors.append("requirements_all.txt is not up to date")
@@ -309,14 +331,16 @@ def main():
             print("******* ERROR")
             print('\n'.join(errors))
             print("Please run script/gen_requirements_all.py")
-            sys.exit(1)
+            return 1
 
-        sys.exit(0)
+        return 0
 
     write_requirements_file(reqs_file)
     write_test_requirements_file(reqs_test_file)
     write_constraints_file(constraints)
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    _VAL = sys.argv[-1] == 'validate'
+    sys.exit(main(_VAL))

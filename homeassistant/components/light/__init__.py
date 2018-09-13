@@ -40,9 +40,8 @@ SUPPORT_BRIGHTNESS = 1
 SUPPORT_COLOR_TEMP = 2
 SUPPORT_EFFECT = 4
 SUPPORT_FLASH = 8
-SUPPORT_RGB_COLOR = 16
+SUPPORT_COLOR = 16
 SUPPORT_TRANSITION = 32
-SUPPORT_XY_COLOR = 64
 SUPPORT_WHITE_VALUE = 128
 
 # Integer that represents transition time in seconds to make change.
@@ -51,6 +50,7 @@ ATTR_TRANSITION = "transition"
 # Lists holding color values
 ATTR_RGB_COLOR = "rgb_color"
 ATTR_XY_COLOR = "xy_color"
+ATTR_HS_COLOR = "hs_color"
 ATTR_COLOR_TEMP = "color_temp"
 ATTR_KELVIN = "kelvin"
 ATTR_MIN_MIREDS = "min_mireds"
@@ -83,16 +83,6 @@ COLOR_GROUP = "Color descriptors"
 
 LIGHT_PROFILES_FILE = "light_profiles.csv"
 
-PROP_TO_ATTR = {
-    'brightness': ATTR_BRIGHTNESS,
-    'color_temp': ATTR_COLOR_TEMP,
-    'rgb_color': ATTR_RGB_COLOR,
-    'xy_color': ATTR_XY_COLOR,
-    'white_value': ATTR_WHITE_VALUE,
-    'effect_list': ATTR_EFFECT_LIST,
-    'effect': ATTR_EFFECT,
-}
-
 # Service call validation schemas
 VALID_TRANSITION = vol.All(vol.Coerce(float), vol.Clamp(min=0, max=6553))
 VALID_BRIGHTNESS = vol.All(vol.Coerce(int), vol.Clamp(min=0, max=255))
@@ -110,6 +100,11 @@ LIGHT_TURN_ON_SCHEMA = vol.Schema({
                 vol.Coerce(tuple)),
     vol.Exclusive(ATTR_XY_COLOR, COLOR_GROUP):
         vol.All(vol.ExactSequence((cv.small_float, cv.small_float)),
+                vol.Coerce(tuple)),
+    vol.Exclusive(ATTR_HS_COLOR, COLOR_GROUP):
+        vol.All(vol.ExactSequence(
+            (vol.All(vol.Coerce(float), vol.Range(min=0, max=360)),
+             vol.All(vol.Coerce(float), vol.Range(min=0, max=100)))),
                 vol.Coerce(tuple)),
     vol.Exclusive(ATTR_COLOR_TEMP, COLOR_GROUP):
         vol.All(vol.Coerce(int), vol.Range(min=1)),
@@ -149,13 +144,13 @@ def is_on(hass, entity_id=None):
 
 @bind_hass
 def turn_on(hass, entity_id=None, transition=None, brightness=None,
-            brightness_pct=None, rgb_color=None, xy_color=None,
+            brightness_pct=None, rgb_color=None, xy_color=None, hs_color=None,
             color_temp=None, kelvin=None, white_value=None,
             profile=None, flash=None, effect=None, color_name=None):
     """Turn all or specified light on."""
     hass.add_job(
         async_turn_on, hass, entity_id, transition, brightness, brightness_pct,
-        rgb_color, xy_color, color_temp, kelvin, white_value,
+        rgb_color, xy_color, hs_color, color_temp, kelvin, white_value,
         profile, flash, effect, color_name)
 
 
@@ -163,8 +158,9 @@ def turn_on(hass, entity_id=None, transition=None, brightness=None,
 @bind_hass
 def async_turn_on(hass, entity_id=None, transition=None, brightness=None,
                   brightness_pct=None, rgb_color=None, xy_color=None,
-                  color_temp=None, kelvin=None, white_value=None,
-                  profile=None, flash=None, effect=None, color_name=None):
+                  hs_color=None, color_temp=None, kelvin=None,
+                  white_value=None, profile=None, flash=None, effect=None,
+                  color_name=None):
     """Turn all or specified light on."""
     data = {
         key: value for key, value in [
@@ -175,6 +171,7 @@ def async_turn_on(hass, entity_id=None, transition=None, brightness=None,
             (ATTR_BRIGHTNESS_PCT, brightness_pct),
             (ATTR_RGB_COLOR, rgb_color),
             (ATTR_XY_COLOR, xy_color),
+            (ATTR_HS_COLOR, hs_color),
             (ATTR_COLOR_TEMP, color_temp),
             (ATTR_KELVIN, kelvin),
             (ATTR_WHITE_VALUE, white_value),
@@ -254,6 +251,14 @@ def preprocess_turn_on_alternatives(params):
     if brightness_pct is not None:
         params[ATTR_BRIGHTNESS] = int(255 * brightness_pct/100)
 
+    xy_color = params.pop(ATTR_XY_COLOR, None)
+    if xy_color is not None:
+        params[ATTR_HS_COLOR] = color_util.color_xy_to_hs(*xy_color)
+
+    rgb_color = params.pop(ATTR_RGB_COLOR, None)
+    if rgb_color is not None:
+        params[ATTR_HS_COLOR] = color_util.color_RGB_to_hs(*rgb_color)
+
 
 class SetIntentHandler(intent.IntentHandler):
     """Handle set color intents."""
@@ -281,7 +286,7 @@ class SetIntentHandler(intent.IntentHandler):
 
         if 'color' in slots:
             intent.async_test_feature(
-                state, SUPPORT_RGB_COLOR, 'changing colors')
+                state, SUPPORT_COLOR, 'changing colors')
             service_data[ATTR_RGB_COLOR] = slots['color']['value']
             # Use original passed in value of the color because we don't have
             # human readable names for that internally.
@@ -318,7 +323,7 @@ class SetIntentHandler(intent.IntentHandler):
 
 async def async_setup(hass, config):
     """Expose light control via state machine and services."""
-    component = EntityComponent(
+    component = hass.data[DOMAIN] = EntityComponent(
         _LOGGER, DOMAIN, hass, SCAN_INTERVAL, GROUP_NAME_ALL_LIGHTS)
     await component.async_setup(config)
 
@@ -327,8 +332,8 @@ async def async_setup(hass, config):
     if not profiles_valid:
         return False
 
-    async def async_handle_light_service(service):
-        """Handle a turn light on or off service call."""
+    async def async_handle_light_on_service(service):
+        """Handle a turn light on service call."""
         # Get the validated data
         params = service.data.copy()
 
@@ -340,36 +345,52 @@ async def async_setup(hass, config):
 
         update_tasks = []
         for light in target_lights:
-            if service.service == SERVICE_TURN_ON:
-                await light.async_turn_on(**params)
-            elif service.service == SERVICE_TURN_OFF:
-                await light.async_turn_off(**params)
-            else:
-                await light.async_toggle(**params)
+            light.async_set_context(service.context)
+
+            pars = params
+            if not pars:
+                pars = params.copy()
+                pars[ATTR_PROFILE] = Profiles.get_default(light.entity_id)
+                preprocess_turn_on_alternatives(pars)
+            await light.async_turn_on(**pars)
 
             if not light.should_poll:
                 continue
-            update_tasks.append(light.async_update_ha_state(True))
+
+            update_tasks.append(
+                light.async_update_ha_state(True))
 
         if update_tasks:
             await asyncio.wait(update_tasks, loop=hass.loop)
 
     # Listen for light on and light off service calls.
     hass.services.async_register(
-        DOMAIN, SERVICE_TURN_ON, async_handle_light_service,
+        DOMAIN, SERVICE_TURN_ON, async_handle_light_on_service,
         schema=LIGHT_TURN_ON_SCHEMA)
 
-    hass.services.async_register(
-        DOMAIN, SERVICE_TURN_OFF, async_handle_light_service,
-        schema=LIGHT_TURN_OFF_SCHEMA)
+    component.async_register_entity_service(
+        SERVICE_TURN_OFF, LIGHT_TURN_OFF_SCHEMA,
+        'async_turn_off'
+    )
 
-    hass.services.async_register(
-        DOMAIN, SERVICE_TOGGLE, async_handle_light_service,
-        schema=LIGHT_TOGGLE_SCHEMA)
+    component.async_register_entity_service(
+        SERVICE_TOGGLE, LIGHT_TOGGLE_SCHEMA,
+        'async_toggle'
+    )
 
     hass.helpers.intent.async_register(SetIntentHandler())
 
     return True
+
+
+async def async_setup_entry(hass, entry):
+    """Set up a config entry."""
+    return await hass.data[DOMAIN].async_setup_entry(entry)
+
+
+async def async_unload_entry(hass, entry):
+    """Unload a config entry."""
+    return await hass.data[DOMAIN].async_unload_entry(entry)
 
 
 class Profiles:
@@ -416,11 +437,21 @@ class Profiles:
         """Return a named profile."""
         return cls._all.get(name)
 
+    @classmethod
+    def get_default(cls, entity_id):
+        """Return the default turn-on profile for the given light."""
+        # pylint: disable=unsupported-membership-test
+        name = entity_id + ".default"
+        if name in cls._all:
+            return name
+        name = ENTITY_ID_ALL_LIGHTS + ".default"
+        if name in cls._all:
+            return name
+        return None
+
 
 class Light(ToggleEntity):
     """Representation of a light."""
-
-    # pylint: disable=no-self-use
 
     @property
     def brightness(self):
@@ -428,13 +459,8 @@ class Light(ToggleEntity):
         return None
 
     @property
-    def xy_color(self):
-        """Return the XY color value [float, float]."""
-        return None
-
-    @property
-    def rgb_color(self):
-        """Return the RGB color value [int, int, int]."""
+    def hs_color(self):
+        """Return the hue and saturation color value [float, float]."""
         return None
 
     @property
@@ -446,12 +472,14 @@ class Light(ToggleEntity):
     def min_mireds(self):
         """Return the coldest color_temp that this light supports."""
         # Default to the Philips Hue value that HA has always assumed
-        return 154
+        # https://developers.meethue.com/documentation/core-concepts
+        return 153
 
     @property
     def max_mireds(self):
         """Return the warmest color_temp that this light supports."""
         # Default to the Philips Hue value that HA has always assumed
+        # https://developers.meethue.com/documentation/core-concepts
         return 500
 
     @property
@@ -473,24 +501,37 @@ class Light(ToggleEntity):
     def state_attributes(self):
         """Return optional state attributes."""
         data = {}
+        supported_features = self.supported_features
 
-        if self.supported_features & SUPPORT_COLOR_TEMP:
+        if supported_features & SUPPORT_COLOR_TEMP:
             data[ATTR_MIN_MIREDS] = self.min_mireds
             data[ATTR_MAX_MIREDS] = self.max_mireds
 
         if self.is_on:
-            for prop, attr in PROP_TO_ATTR.items():
-                value = getattr(self, prop)
-                if value is not None:
-                    data[attr] = value
+            if supported_features & SUPPORT_BRIGHTNESS:
+                data[ATTR_BRIGHTNESS] = self.brightness
 
-            if ATTR_RGB_COLOR not in data and ATTR_XY_COLOR in data and \
-               ATTR_BRIGHTNESS in data:
-                data[ATTR_RGB_COLOR] = color_util.color_xy_brightness_to_RGB(
-                    data[ATTR_XY_COLOR][0], data[ATTR_XY_COLOR][1],
-                    data[ATTR_BRIGHTNESS])
+            if supported_features & SUPPORT_COLOR_TEMP:
+                data[ATTR_COLOR_TEMP] = self.color_temp
 
-        return data
+            if self.supported_features & SUPPORT_COLOR and self.hs_color:
+                # pylint: disable=unsubscriptable-object,not-an-iterable
+                hs_color = self.hs_color
+                data[ATTR_HS_COLOR] = (
+                    round(hs_color[0], 3),
+                    round(hs_color[1], 3),
+                )
+                data[ATTR_RGB_COLOR] = color_util.color_hs_to_RGB(*hs_color)
+                data[ATTR_XY_COLOR] = color_util.color_hs_to_xy(*hs_color)
+
+            if supported_features & SUPPORT_WHITE_VALUE:
+                data[ATTR_WHITE_VALUE] = self.white_value
+
+            if supported_features & SUPPORT_EFFECT:
+                data[ATTR_EFFECT_LIST] = self.effect_list
+                data[ATTR_EFFECT] = self.effect
+
+        return {key: val for key, val in data.items() if val is not None}
 
     @property
     def supported_features(self):

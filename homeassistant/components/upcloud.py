@@ -92,7 +92,7 @@ def setup(hass, config):
     return True
 
 
-class UpCloud(object):
+class UpCloud:
     """Handle all communication with the UpCloud API."""
 
     def __init__(self, manager):
@@ -115,6 +115,11 @@ class UpCloudServerEntity(Entity):
         self._upcloud = upcloud
         self.uuid = uuid
         self.data = None
+
+    @property
+    def unique_id(self) -> str:
+        """Return unique ID for the entity."""
+        return self.uuid
 
     @property
     def name(self):

@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import homeassistant.scripts.check_config as check_config
 from homeassistant.config import YAML_CONFIG_FILE
-from homeassistant.loader import set_component
 from tests.common import patch_yaml_files, get_test_config_dir
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,6 +19,12 @@ BASE_CONFIG = (
     '  elevation: 1600\n'
     '  unit_system: metric\n'
     '  time_zone: GMT\n'
+    '\n\n'
+)
+
+BAD_CORE_CONFIG = (
+    'homeassistant:\n'
+    '  unit_system: bad\n'
     '\n\n'
 )
 
@@ -41,15 +46,24 @@ class TestCheckConfig(unittest.TestCase):
         # this ensures we have one.
         try:
             asyncio.get_event_loop()
-        except (RuntimeError, AssertionError):
-            # Py35: RuntimeError
-            # Py34: AssertionError
+        except RuntimeError:
             asyncio.set_event_loop(asyncio.new_event_loop())
 
         # Will allow seeing full diff
         self.maxDiff = None  # pylint: disable=invalid-name
 
     # pylint: disable=no-self-use,invalid-name
+    @patch('os.path.isfile', return_value=True)
+    def test_bad_core_config(self, isfile_patch):
+        """Test a bad core config setup."""
+        files = {
+            YAML_CONFIG_FILE: BAD_CORE_CONFIG,
+        }
+        with patch_yaml_files(files):
+            res = check_config.check(get_test_config_dir())
+            assert res['except'].keys() == {'homeassistant'}
+            assert res['except']['homeassistant'][1] == {'unit_system': 'bad'}
+
     @patch('os.path.isfile', return_value=True)
     def test_config_platform_valid(self, isfile_patch):
         """Test a valid platform setup."""
@@ -108,7 +122,6 @@ class TestCheckConfig(unittest.TestCase):
     def test_component_platform_not_found(self, isfile_patch):
         """Test errors if component or platform not found."""
         # Make sure they don't exist
-        set_component('beer', None)
         files = {
             YAML_CONFIG_FILE: BASE_CONFIG + 'beer:',
         }
@@ -121,7 +134,6 @@ class TestCheckConfig(unittest.TestCase):
             assert res['secrets'] == {}
             assert len(res['yaml_files']) == 1
 
-        set_component('light.beer', None)
         files = {
             YAML_CONFIG_FILE: BASE_CONFIG + 'light:\n  platform: beer',
         }
@@ -165,15 +177,15 @@ class TestCheckConfig(unittest.TestCase):
                 'server_host': '0.0.0.0',
                 'server_port': 8123,
                 'trusted_networks': [],
-                'use_x_forwarded_for': False}
+                'ssl_profile': 'modern',
+            }
             assert res['secret_cache'] == {secrets_path: {'http_pw': 'abc123'}}
             assert res['secrets'] == {'http_pw': 'abc123'}
             assert normalize_yaml_files(res) == [
                 '.../configuration.yaml', '.../secrets.yaml']
 
     @patch('os.path.isfile', return_value=True)
-    def test_package_invalid(self, isfile_patch): \
-            # pylint: disable=no-self-use,invalid-name
+    def test_package_invalid(self, isfile_patch):
         """Test a valid platform setup."""
         files = {
             YAML_CONFIG_FILE: BASE_CONFIG + (
@@ -194,8 +206,7 @@ class TestCheckConfig(unittest.TestCase):
             assert res['secrets'] == {}
             assert len(res['yaml_files']) == 1
 
-    def test_bootstrap_error(self): \
-            # pylint: disable=no-self-use,invalid-name
+    def test_bootstrap_error(self):
         """Test a valid platform setup."""
         files = {
             YAML_CONFIG_FILE: BASE_CONFIG + 'automation: !include no.yaml',

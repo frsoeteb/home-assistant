@@ -5,7 +5,7 @@ import aiohttp
 
 import homeassistant.components.switch.rest as rest
 from homeassistant.setup import setup_component
-from homeassistant.util.async import run_coroutine_threadsafe
+from homeassistant.util.async_ import run_coroutine_threadsafe
 from homeassistant.helpers.template import Template
 from tests.common import get_test_home_assistant, assert_setup_component
 
@@ -14,7 +14,7 @@ class TestRestSwitchSetup:
     """Tests for setting up the REST switch platform."""
 
     def setup_method(self):
-        """Setup things to be run when tests are started."""
+        """Set up things to be run when tests are started."""
         self.hass = get_test_home_assistant()
 
     def teardown_method(self):
@@ -95,7 +95,7 @@ class TestRestSwitch:
     """Tests for REST switch platform."""
 
     def setup_method(self):
-        """Setup things to be run when tests are started."""
+        """Set up things to be run when tests are started."""
         self.hass = get_test_home_assistant()
         self.name = 'foo'
         self.method = 'post'

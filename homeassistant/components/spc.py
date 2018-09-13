@@ -56,14 +56,14 @@ def async_setup(hass, config):
     # add sensor devices for each zone (typically motion/fire/door sensors)
     zones = yield from api.get_zones()
     if zones:
-        hass.async_add_job(discovery.async_load_platform(
+        hass.async_create_task(discovery.async_load_platform(
             hass, 'binary_sensor', DOMAIN,
             {ATTR_DISCOVER_DEVICES: zones}, config))
 
     # create a separate alarm panel for each area
     areas = yield from api.get_areas()
     if areas:
-        hass.async_add_job(discovery.async_load_platform(
+        hass.async_create_task(discovery.async_load_platform(
             hass, 'alarm_control_panel', DOMAIN,
             {ATTR_DISCOVER_AREAS: areas}, config))
 
@@ -151,7 +151,7 @@ def _ws_process_message(message, async_callback, *args):
             "Unsuccessful websocket message delivered, ignoring: %s", message)
     try:
         yield from async_callback(message['data']['sia'], *args)
-    except:  # noqa: E722  # pylint: disable=bare-except
+    except:  # noqa: E722 pylint: disable=bare-except
         _LOGGER.exception("Exception in callback, ignoring")
 
 
@@ -189,12 +189,7 @@ class SpcWebGateway:
 
     def start_listener(self, async_callback, *args):
         """Start the websocket listener."""
-        try:
-            from asyncio import ensure_future
-        except ImportError:
-            from asyncio import async as ensure_future
-
-        ensure_future(self._ws_listen(async_callback, *args))
+        asyncio.ensure_future(self._ws_listen(async_callback, *args))
 
     def _build_url(self, resource):
         return urljoin(self._api_url, "spc/{}".format(resource))

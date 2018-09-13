@@ -17,7 +17,7 @@ from homeassistant.const import (
 from homeassistant.exceptions import PlatformNotReady
 import homeassistant.helpers.config_validation as cv
 
-REQUIREMENTS = ['python-songpal==0.0.6']
+REQUIREMENTS = ['python-songpal==0.0.7']
 
 SUPPORT_SONGPAL = SUPPORT_VOLUME_SET | SUPPORT_VOLUME_STEP | \
                   SUPPORT_VOLUME_MUTE | SUPPORT_SELECT_SOURCE | \
@@ -47,7 +47,7 @@ SET_SOUND_SCHEMA = vol.Schema({
 
 
 async def async_setup_platform(hass, config,
-                               async_add_devices, discovery_info=None):
+                               async_add_entities, discovery_info=None):
     """Set up the Songpal platform."""
     from songpal import SongpalException
     if PLATFORM not in hass.data:
@@ -72,7 +72,7 @@ async def async_setup_platform(hass, config,
 
     hass.data[PLATFORM][endpoint] = device
 
-    async_add_devices([device], True)
+    async_add_entities([device], True)
 
     async def async_service_handler(service):
         """Service handler."""
@@ -101,7 +101,7 @@ class SongpalDevice(MediaPlayerDevice):
         import songpal
         self._name = name
         self.endpoint = endpoint
-        self.dev = songpal.Protocol(self.endpoint)
+        self.dev = songpal.Device(self.endpoint)
         self._sysinfo = None
 
         self._state = False
@@ -151,10 +151,10 @@ class SongpalDevice(MediaPlayerDevice):
                 return
 
             if len(volumes) > 1:
-                _LOGGER.warning("Got %s volume controls, using the first one",
-                                volumes)
+                _LOGGER.debug("Got %s volume controls, using the first one",
+                              volumes)
 
-            volume = volumes.pop()
+            volume = volumes[0]
             _LOGGER.debug("Current volume: %s", volume)
 
             self._volume_max = volume.maxVolume
