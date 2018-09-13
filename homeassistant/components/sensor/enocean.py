@@ -9,19 +9,23 @@ import logging
 import voluptuous as vol
 
 from homeassistant.components.sensor import PLATFORM_SCHEMA
-from homeassistant.const import (CONF_NAME, CONF_ID)
+from homeassistant.const import (CONF_NAME, CONF_ID, CONF_SENSOR_TYPE)
 from homeassistant.helpers.entity import Entity
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components import enocean
 
 _LOGGER = logging.getLogger(__name__)
 
-DEFAULT_NAME = 'EnOcean sensor'
+DEFAULT_NAME = 'EnOcean Power sensor'
 DEPENDENCIES = ['enocean']
+POWER_SENSOR_TYPE = 'powersensor'
+ENERGY_SENSOR_TYPE = 'energysensor'
+DEFAULT_SENSOR_TYPE = POWER_SENSOR_TYPE
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_ID): vol.All(cv.ensure_list, [vol.Coerce(int)]),
     vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
+    vol.Optional(CONF_SENSOR_TYPE, default=DEFAULT_SENSOR_TYPE): cv.string,
 })
 
 
@@ -29,37 +33,49 @@ def setup_platform(hass, config, add_entities, discovery_info=None):
     """Set up an EnOcean sensor device."""
     dev_id = config.get(CONF_ID)
     devname = config.get(CONF_NAME)
+    stype = config.get(CONF_SENSOR_TYPE)
 
-    add_entities([EnOceanSensor(dev_id, devname)])
-
+    add_entities([EnOceanSensor(dev_id, devname, stype)])
 
 class EnOceanSensor(enocean.EnOceanDevice, Entity):
     """Representation of an EnOcean sensor device such as a power meter."""
 
-    def __init__(self, dev_id, devname):
+    def __init__(self, dev_id, devname, stype):
         """Initialize the EnOcean sensor device."""
         enocean.EnOceanDevice.__init__(self)
-        self.stype = "powersensor"
+        self.stype = stype
         self.power = None
-        self.dev_id = dev_id
+        self._dev_id = dev_id
         self.which = -1
         self.onoff = -1
         self.devname = devname
-
+        self.energy = None
     @property
     def name(self):
         """Return the name of the device."""
-        return 'Power %s' % self.devname
+        
+        return self.devname 
 
     def value_changed(self, value):
         """Update the internal state of the device."""
-        self.power = value
+        if isinstance(value, dict):
+            self.energy = value["energy"]
+            _LOGGER.debug("energy = %s", self.energy)
+        else:    
+            self.power = value
         self.schedule_update_ha_state()
 
     @property
     def state(self):
         """Return the state of the device."""
         return self.power
+
+    @property
+    def device_state_attributes(self):
+        """Return device specific state attributes."""
+        return {
+            'energy' : self.energy
+        }
 
     @property
     def unit_of_measurement(self):

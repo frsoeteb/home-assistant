@@ -52,6 +52,11 @@ class EnOceanDongle:
         """Register another device."""
         self.__devices.append(dev)
 
+    
+    def base_id(self):
+        """Return base id of the EnOcean dongle."""
+        return self.__communicator.base_id()
+
     def send_command(self, command):
         """Send a command from the EnOcean dongle."""
         self.__communicator.send(command)
@@ -63,6 +68,62 @@ class EnOceanDongle:
         for i, j in enumerate(reversed(data)):
             output |= (j << i * 8)
         return output
+    
+    def _updateDevice(self, device, data):
+        rxtype = None
+        value = None
+        if data[0] == 0xa5:
+            if data[1] == 0x02:
+                rxtype = "dimmerstatus"
+                value = data[2]
+                _LOGGER.debug("dimmer value = %s", value)
+            elif data[4] == 0x8f:
+                rxtype = "power status serial number"
+            elif data[4] in [0x0C, 0x1C]:
+                rxtype = "powersensor"
+                value = data[3] + (data[2] << 8)
+            elif data[4] in [0x09, 0x19]:
+                rxtype = "energysensor"
+                divisor = data[4] & 0x3
+                value = (data[1] << 16) + (data[2] << 8) + data[3]
+                value = value / float(10 ** divisor)
+        elif data[0] == 0xF6:
+            if device.stype == "listener":
+                if data[6] == 0x30:
+                    rxtype = "wallswitch"
+                    value = 1
+                elif data[6] == 0x20:
+                    rxtype = "wallswitch"
+                    value = 0
+                elif data[2] == 0x60:    
+                    rxtype = "switch_status"
+                    if data[3] == 0xe4:
+                        value = 1
+                    elif data[3] == 0x80:
+                        value = 0
+            else:
+                rxtype = "FSR14"
+                value = True if data[1] == 0x70 else False
+
+        _LOGGER.debug("rxtype = %s", rxtype)
+        
+        try:
+            if value != None:
+                if rxtype == "wallswitch" and device.stype == "listener":
+                    device.value_changed(value, data[1])
+                elif rxtype == "energysensor":
+                    updateval = {"energy" : value}
+                    if value > 0:
+                        _LOGGER.debug("energy in update = %s", value)           
+                        _LOGGER.debug("energy valuedict = %s", updateval)
+                        device.value_changed(updateval)  
+                    else:
+                        return             
+                else:
+                    device.value_changed(value)    
+        except:
+            _LOGGER.error("exception updating device, rxtype = %s, value = %s, device = %s, data = %s", rxtype, value, str(device._dev_id),  str(data))
+
 
     def callback(self, temp):
         """Handle EnOcean device's callback.
@@ -72,48 +133,10 @@ class EnOceanDongle:
         """
         from enocean.protocol.packet import RadioPacket
         if isinstance(temp, RadioPacket):
-            _LOGGER.debug("Received radio packet: %s", temp)
-            rxtype = None
-            value = None
-            channel = 0
-            if temp.data[6] == 0x30:
-                rxtype = "wallswitch"
-                value = 1
-            elif temp.data[6] == 0x20:
-                rxtype = "wallswitch"
-                value = 0
-            elif temp.data[4] == 0x0c:
-                rxtype = "power"
-                value = temp.data[3] + (temp.data[2] << 8)
-            elif temp.data[2] & 0x60 == 0x60:
-                rxtype = "switch_status"
-                channel = temp.data[2] & 0x1F
-                if temp.data[3] == 0xe4:
-                    value = 1
-                elif temp.data[3] == 0x80:
-                    value = 0
-            elif temp.data[0] == 0xa5 and temp.data[1] == 0x02:
-                rxtype = "dimmerstatus"
-                value = temp.data[2]
             for device in self.__devices:
-                if rxtype == "wallswitch" and device.stype == "listener":
-                    if temp.sender_int == self._combine_hex(device.dev_id):
-                        device.value_changed(value, temp.data[1])
-                if rxtype == "power" and device.stype == "powersensor":
-                    if temp.sender_int == self._combine_hex(device.dev_id):
-                        device.value_changed(value)
-                if rxtype == "power" and device.stype == "switch":
-                    if temp.sender_int == self._combine_hex(device.dev_id):
-                        if value > 10:
-                            device.value_changed(1)
-                if rxtype == "switch_status" and device.stype == "switch" and \
-                        channel == device.channel:
-                    if temp.sender_int == self._combine_hex(device.dev_id):
-                        device.value_changed(value)
-                if rxtype == "dimmerstatus" and device.stype == "dimmer":
-                    if temp.sender_int == self._combine_hex(device.dev_id):
-                        device.value_changed(value)
-
+                if temp.sender_int == self._combine_hex(device._dev_id):
+                    self._updateDevice(device, temp.data)
+ 
 
 class EnOceanDevice():
     """Parent class for all devices associated with the EnOcean component."""
@@ -123,6 +146,7 @@ class EnOceanDevice():
         ENOCEAN_DONGLE.register_device(self)
         self.stype = ""
         self.sensorid = [0x00, 0x00, 0x00, 0x00]
+        self._dev_id = None
 
     # pylint: disable=no-self-use
     def send_command(self, data, optional, packet_type):
