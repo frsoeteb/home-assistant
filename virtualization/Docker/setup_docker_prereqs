@@ -29,6 +29,10 @@ PACKAGES=(
   ffmpeg
   # homeassistant.components.sensor.iperf3
   iperf3
+  # socat for remote EnOcean connectivity
+  socat
+  # nano editor
+  nano
 )
 
 # Required debian packages for building dependencies

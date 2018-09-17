@@ -6,12 +6,12 @@ FROM python:3.6
 LABEL maintainer="Paulus Schoutsen <Paulus@PaulusSchoutsen.nl>"
 
 # Uncomment any of the following lines to disable the installation.
-#ENV INSTALL_TELLSTICK no
-#ENV INSTALL_OPENALPR no
-ENV INSTALL_FFMPEG no
-#ENV INSTALL_LIBCEC no
-#ENV INSTALL_SSOCR no
-#ENV INSTALL_IPERF3 no
+ENV INSTALL_TELLSTICK no
+ENV INSTALL_OPENALPR no
+#ENV INSTALL_FFMPEG no
+ENV INSTALL_LIBCEC no
+ENV INSTALL_SSOCR no
+ENV INSTALL_IPERF3 no
 
 VOLUME /config
 
@@ -33,7 +33,7 @@ RUN pip3 install --no-cache-dir -r requirements_all.txt && \
 COPY . .
 
 COPY script/docker-startup.sh /usr/src/app/docker-startup.sh
-COPY script/socat.sh /usr/src/app/socat.sh
+COPY script/socat /usr/src/app/socat.sh
 
 ENTRYPOINT ["/usr/src/app/docker-startup.sh"]
 

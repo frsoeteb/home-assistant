@@ -22,5 +22,7 @@ IFS="$oldifs"
 set +f
 fi
 
-echo "Starting homeassistant"
+sleep 5
+
+echo "Starting homeassistant custom startup"
 exec python -m homeassistant --config /config

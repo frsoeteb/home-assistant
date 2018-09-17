@@ -54,7 +54,7 @@ class EnOceanLight(enocean.EnOceanDevice, Light):
         self._sender_id = sender_id
         self._dev_id = dev_id
         self._devname = devname
-        self.stype = 'dimmer'
+        self._stype = 'dimmer'
         self.last_saved_brightness = 50
 
     @property

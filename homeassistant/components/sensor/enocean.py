@@ -43,38 +43,38 @@ class EnOceanSensor(enocean.EnOceanDevice, Entity):
     def __init__(self, dev_id, devname, stype):
         """Initialize the EnOcean sensor device."""
         enocean.EnOceanDevice.__init__(self)
-        self.stype = stype
-        self.power = None
+        self._stype = stype
+        self._power = None
         self._dev_id = dev_id
-        self.which = -1
-        self.onoff = -1
-        self.devname = devname
-        self.energy = None
+        self._which = -1
+        self._onoff = -1
+        self._devname = devname
+        self._energy = None
     @property
     def name(self):
         """Return the name of the device."""
         
-        return self.devname 
+        return self._devname 
 
     def value_changed(self, value):
         """Update the internal state of the device."""
         if isinstance(value, dict):
-            self.energy = value["energy"]
-            _LOGGER.debug("energy = %s", self.energy)
+            self._energy = value["energy"]
+            _LOGGER.debug("energy = %s", self._energy)
         else:    
-            self.power = value
+            self._power = value
         self.schedule_update_ha_state()
 
     @property
     def state(self):
         """Return the state of the device."""
-        return self.power
+        return self._power
 
     @property
     def device_state_attributes(self):
         """Return device specific state attributes."""
         return {
-            'energy' : self.energy
+            'energy' : self._energy
         }
 
     @property

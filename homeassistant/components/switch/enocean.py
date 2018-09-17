@@ -58,7 +58,7 @@ class EnOceanSwitch(enocean.EnOceanDevice, ToggleEntity):
         enocean.EnOceanDevice.__init__(self)
         self._dev_id = dev_id
         self._devname = devname
-        self.channel = channel
+        self._channel = channel
         self._light = None
         self._on_state = False
         self._on_state2 = False
@@ -79,7 +79,7 @@ class EnOceanSwitch(enocean.EnOceanDevice, ToggleEntity):
         optional = [0x03, ]
         optional.extend(self._dev_id)
         optional.extend([0xff, 0x00])
-        self.send_command(data=[0xD2, 0x01, self.channel & 0xFF, 0x64, 0x00,
+        self.send_command(data=[0xD2, 0x01, self._channel & 0xFF, 0x64, 0x00,
                                 0x00, 0x00, 0x00, 0x00], optional=optional,
                           packet_type=0x01)
         self._on_state = True
@@ -89,7 +89,7 @@ class EnOceanSwitch(enocean.EnOceanDevice, ToggleEntity):
         optional = [0x03, ]
         optional.extend(self._dev_id)
         optional.extend([0xff, 0x00])
-        self.send_command(data=[0xD2, 0x01, self.channel & 0xFF, 0x00, 0x00,
+        self.send_command(data=[0xD2, 0x01, self._channel & 0xFF, 0x00, 0x00,
                                 0x00, 0x00, 0x00, 0x00], optional=optional,
                           packet_type=0x01)
         self._on_state = False
@@ -102,7 +102,7 @@ class EnOceanSwitch(enocean.EnOceanDevice, ToggleEntity):
 class EnOceanFSR14Switch(EnOceanSwitch):
     """Representation of an EnOcean switch device."""
 
-    def __init__(self, dev_id, devname, senderid=None, channel):
+    def __init__(self, dev_id, devname, senderid, channel):
         """Initialize the EnOcean switch device."""
         EnOceanSwitch.__init__(self, dev_id, devname, channel)
         self._sender_id = senderid
@@ -127,7 +127,7 @@ class EnOceanFSR14Switch(EnOceanSwitch):
 class EnOceanRPSSwitch(EnOceanSwitch):
     """Representation of an EnOcean switch device."""
 
-    def __init__(self, dev_id, devname, senderid=None, channel):
+    def __init__(self, dev_id, devname, senderid, channel):
         """Initialize the EnOcean switch device."""
         EnOceanSwitch.__init__(self, dev_id, devname, channel)
         self._sender_id = senderid

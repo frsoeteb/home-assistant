@@ -88,7 +88,7 @@ class EnOceanDongle:
                 value = (data[1] << 16) + (data[2] << 8) + data[3]
                 value = value / float(10 ** divisor)
         elif data[0] == 0xF6:
-            if device.stype == "listener":
+            if device._stype == "listener":
                 if data[6] == 0x30:
                     rxtype = "wallswitch"
                     value = 1
@@ -109,7 +109,7 @@ class EnOceanDongle:
         
         try:
             if value != None:
-                if rxtype == "wallswitch" and device.stype == "listener":
+                if rxtype == "wallswitch" and device._stype == "listener":
                     device.value_changed(value, data[1])
                 elif rxtype == "energysensor":
                     updateval = {"energy" : value}
@@ -144,8 +144,8 @@ class EnOceanDevice():
     def __init__(self):
         """Initialize the device."""
         ENOCEAN_DONGLE.register_device(self)
-        self.stype = ""
-        self.sensorid = [0x00, 0x00, 0x00, 0x00]
+        self._stype = ""
+        self._sensorid = [0x00, 0x00, 0x00, 0x00]
         self._dev_id = None
 
     # pylint: disable=no-self-use

@@ -42,17 +42,17 @@ class EnOceanBinarySensor(enocean.EnOceanDevice, BinarySensorDevice):
     def __init__(self, dev_id, devname, device_class):
         """Initialize the EnOcean binary sensor."""
         enocean.EnOceanDevice.__init__(self)
-        self.stype = 'listener'
-        self.dev_id = dev_id
-        self.which = -1
-        self.onoff = -1
-        self.devname = devname
+        self._stype = 'listener'
+        self._dev_id = dev_id
+        self._which = -1
+        self._onoff = -1
+        self._devname = devname
         self._device_class = device_class
 
     @property
     def name(self):
         """Return the default name for the binary sensor."""
-        return self.devname
+        return self._devname
 
     @property
     def device_class(self):
@@ -67,24 +67,24 @@ class EnOceanBinarySensor(enocean.EnOceanDevice, BinarySensorDevice):
         """
         self.schedule_update_ha_state()
         if value2 == 0x70:
-            self.which = 0
-            self.onoff = 0
+            self._which = 0
+            self._onoff = 0
         elif value2 == 0x50:
-            self.which = 0
-            self.onoff = 1
+            self._which = 0
+            self._onoff = 1
         elif value2 == 0x30:
-            self.which = 1
-            self.onoff = 0
+            self._which = 1
+            self._onoff = 0
         elif value2 == 0x10:
-            self.which = 1
-            self.onoff = 1
+            self._which = 1
+            self._onoff = 1
         elif value2 == 0x37:
-            self.which = 10
-            self.onoff = 0
+            self._which = 10
+            self._onoff = 0
         elif value2 == 0x15:
-            self.which = 10
-            self.onoff = 1
+            self._which = 10
+            self._onoff = 1
         self.hass.bus.fire('button_pressed', {'id': self.dev_id,
                                               'pushed': value,
-                                              'which': self.which,
-                                              'onoff': self.onoff})
+                                              'which': self._which,
+                                              'onoff': self._olnoff})
